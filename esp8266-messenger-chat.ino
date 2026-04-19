@@ -1,134 +1,142 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 
-const char* ssid="ESP_CHAT";
-const char* password="12345678";
+const char* ssid = "ESP_CHAT";
+const char* password = "12345678";
 
 ESP8266WebServer server(80);
 
-String messages="";
-int msgID=0;
+#define MAX_ROOMS 3
 
+struct Room {
+  String name;
+  String pass;
+  String messages;
+};
+
+Room rooms[MAX_ROOMS];
+
+String currentRoom = "";
+
+/* ================= HTML ================= */
 String page = R"=====(
+
 <!DOCTYPE html>
 <html>
-
 <head>
-
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
-<link rel="stylesheet"
-href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.1/css/all.min.css">
-
-<title>ESP Messenger</title>
+<title>Pro Chat V2</title>
 
 <style>
 
 body{
 margin:0;
 font-family:Arial;
-background:#f0f2f5;
+background:#e5ddd5;
 display:flex;
 justify-content:center;
 align-items:center;
 height:100vh;
 }
 
-#login{
-width:90%;
-max-width:400px;
+.box{
+width:95%;
+max-width:500px;
 background:white;
-padding:30px;
-border-radius:10px;
+border-radius:12px;
+overflow:hidden;
+box-shadow:0 0 12px rgba(0,0,0,0.2);
+}
+
+/* LOGIN */
+#login{
+padding:20px;
 text-align:center;
-box-shadow:0 0 10px rgba(0,0,0,0.2);
 }
 
-#login input{
-width:100%;
+input{
+width:90%;
 padding:12px;
-font-size:18px;
+margin:8px;
+font-size:16px;
+border:1px solid #ccc;
+border-radius:6px;
+}
+
+/* BUTTON FIXED */
+button{
+width:90%;
+padding:12px;
 margin-top:10px;
-}
-
-#login button{
-margin-top:15px;
-padding:12px;
-font-size:18px;
-width:100%;
-background:#0084ff;
+font-size:16px;
+background:#25D366;
 color:white;
 border:none;
 border-radius:6px;
 cursor:pointer;
 }
 
+/* CHAT */
 #chatApp{
 display:none;
-width:95%;
-max-width:700px;
-height:90vh;
-background:white;
-border-radius:10px;
-box-shadow:0 0 10px rgba(0,0,0,0.2);
-display:flex;
 flex-direction:column;
+height:80vh;
 }
 
 .header{
-background:#0084ff;
+background:#25D366;
 color:white;
-padding:15px;
+padding:12px;
 text-align:center;
-font-size:20px;
+font-weight:bold;
 }
 
-.chat-area{
+.chat{
 flex:1;
-overflow-y:auto;
 padding:10px;
+overflow-y:auto;
 background:#e5ddd5;
 }
 
 .msg{
 background:white;
-padding:10px;
-border-radius:8px;
+padding:8px;
 margin:5px;
+border-radius:8px;
+font-size:14px;
+}
+
+/* INPUT AREA FIX */
+.footer{
 display:flex;
-justify-content:space-between;
+padding:8px;
+background:white;
 align-items:center;
 }
 
-.footer{
-display:flex;
-padding:10px;
-background:white;
-}
-
-.footer textarea{
+textarea{
 flex:1;
+height:40px;
 resize:none;
-padding:10px;
-font-size:16px;
-border-radius:5px;
+padding:8px;
+font-size:14px;
+border-radius:6px;
 border:1px solid #ccc;
 }
 
+/* SMALL SEND BUTTON FIXED */
 .send{
-padding:10px;
-font-size:22px;
-cursor:pointer;
-color:#0084ff;
-}
-
-.delete{
-background:red;
+width:60px;
+height:40px;
+margin-left:8px;
+background:#25D366;
 color:white;
-border:none;
-border-radius:5px;
-padding:5px;
-margin-left:10px;
+display:flex;
+justify-content:center;
+align-items:center;
+border-radius:6px;
+cursor:pointer;
+font-weight:bold;
 }
 
 </style>
@@ -137,28 +145,34 @@ margin-left:10px;
 
 <body>
 
+<div class="box">
+
+<!-- LOGIN -->
 <div id="login">
 
-<h2>Enter Your Name</h2>
+<h3>Pro Chat V2</h3>
 
-<input id="username" placeholder="Your name">
+<input id="room" placeholder="Room Name">
+<input id="pass" placeholder="Room Password">
+<input id="user" placeholder="Your Name">
 
-<button onclick="enterChat()">Join Chat</button>
+<button onclick="joinRoom()">Join / Create Room</button>
 
 </div>
 
+<!-- CHAT -->
 <div id="chatApp">
 
-<div class="header">ESP Messenger</div>
+<div class="header" id="title">Chat</div>
 
-<div class="chat-area" id="chat"></div>
+<div class="chat" id="chat"></div>
 
 <div class="footer">
 
-<textarea id="msg" placeholder="Type message"></textarea>
+<textarea id="msg" placeholder="Message..."></textarea>
 
-<div class="send" onclick="sendMsg()">
-<i class="fa-regular fa-paper-plane"></i>
+<div class="send" onclick="sendMsg()">Send</div>
+
 </div>
 
 </div>
@@ -167,43 +181,43 @@ margin-left:10px;
 
 <script>
 
-let username="";
+let room="", user="";
 
-function enterChat(){
+function joinRoom(){
 
-username=document.getElementById("username").value.trim();
+room=document.getElementById("room").value;
+user=document.getElementById("user").value;
+let pass=document.getElementById("pass").value;
 
-if(username===""){
-alert("Please enter name");
-return;
-}
+if(room=="" || user=="") return;
 
+fetch(`/join?room=${room}&pass=${pass}`)
+.then(r=>r.text())
+.then(res=>{
+
+if(res=="ok"){
 document.getElementById("login").style.display="none";
 document.getElementById("chatApp").style.display="flex";
+document.getElementById("title").innerText=room;
+}
+else alert("Wrong room/password");
+});
 
 }
 
 function sendMsg(){
 
 let m=document.getElementById("msg").value;
+if(m=="") return;
 
-if(m==="") return;
-
-fetch("/send?user="+username+"&msg="+encodeURIComponent(m));
+fetch(`/send?room=${room}&user=${user}&msg=${encodeURIComponent(m)}`);
 
 document.getElementById("msg").value="";
-
-}
-
-function deleteMsg(id){
-
-fetch("/delete?id="+id);
-
 }
 
 function update(){
 
-fetch("/get")
+fetch(`/get?room=${room}`)
 .then(r=>r.text())
 .then(data=>{
 document.getElementById("chat").innerHTML=data;
@@ -213,52 +227,87 @@ document.getElementById("chat").innerHTML=data;
 
 setInterval(update,1000);
 
-document.addEventListener("keydown",function(e){
-
-if(e.key==="Enter"){
-e.preventDefault();
-sendMsg();
-}
-
-});
-
 </script>
 
 </body>
-
 </html>
+
 )=====";
 
+/* ================= ROOM LOGIC ================= */
+
+int findRoom(String r){
+for(int i=0;i<MAX_ROOMS;i++){
+if(rooms[i].name==r) return i;
+}
+return -1;
+}
+
+int createRoom(String r, String p){
+for(int i=0;i<MAX_ROOMS;i++){
+if(rooms[i].name==""){
+rooms[i].name=r;
+rooms[i].pass=p;
+rooms[i].messages="";
+return i;
+}
+}
+return -1;
+}
+
+/* ================= HANDLERS ================= */
 
 void handleRoot(){
 server.send(200,"text/html",page);
 }
 
+void handleJoin(){
+
+String r=server.arg("room");
+String p=server.arg("pass");
+
+int idx=findRoom(r);
+
+if(idx==-1){
+idx=createRoom(r,p);
+server.send(200,"text/plain","ok");
+return;
+}
+
+if(rooms[idx].pass==p){
+server.send(200,"text/plain","ok");
+}
+else server.send(200,"text/plain","fail");
+}
+
 void handleSend(){
 
-String user=server.arg("user");
-String msg=server.arg("msg");
+String r=server.arg("room");
+String u=server.arg("user");
+String m=server.arg("msg");
 
-msgID++;
+int idx=findRoom(r);
+if(idx==-1) return;
 
-messages += "<div class='msg'><span><b>"+user+":</b> "+msg+
-"</span><button class='delete' onclick='deleteMsg("+String(msgID)+")'>X</button></div>";
+rooms[idx].messages += "<div class='msg'><b>"+u+":</b> "+m+"</div>";
 
 server.send(200,"text/plain","ok");
-
 }
 
 void handleGet(){
-server.send(200,"text/html",messages);
+
+String r=server.arg("room");
+int idx=findRoom(r);
+
+if(idx==-1){
+server.send(200,"text/html","");
+return;
 }
 
-void handleDelete(){
-
-messages="";
-
-server.send(200,"text/plain","deleted");
-
+server.send(200,"text/html",rooms[idx].messages);
 }
+
+/* ================= SETUP ================= */
 
 void setup(){
 
@@ -267,13 +316,15 @@ Serial.begin(115200);
 WiFi.softAP(ssid,password);
 
 server.on("/",handleRoot);
+server.on("/join",handleJoin);
 server.on("/send",handleSend);
 server.on("/get",handleGet);
-server.on("/delete",handleDelete);
 
 server.begin();
 
 }
+
+/* ================= LOOP ================= */
 
 void loop(){
 server.handleClient();
